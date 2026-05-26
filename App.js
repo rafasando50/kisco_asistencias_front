@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { CameraView, requestCameraPermissionsAsync, getCameraPermissionsAsync } from 'expo-camera';
 
@@ -8,12 +8,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState('Colócate frente a la pantalla');
   
-  // Candado para bloquear múltiples peticiones simultáneas
-  const canDetect = useRef(true);
-  
-  // Estados para simular el escaneo inteligente de rostros
+  // Estados para la animación del escaneo láser (SOLO se activa al presionar el botón)
   const [scanProgress, setScanProgress] = useState(0);
-  const [isScanning, setIsScanning] = useState(true);
+  const [isScanning, setIsScanning] = useState(false);
 
   // 1. Pedir permisos de la cámara al abrir la app
   useEffect(() => {
@@ -38,30 +35,35 @@ export default function App() {
     })();
   }, []);
 
-  // 2. Efecto de escaneo automático simulado de rostro
+  // 2. Animación láser: Corre UNA SOLA VEZ a petición del usuario
   useEffect(() => {
-    let interval;
-    if (hasPermission && isScanning && !loading && canDetect.current) {
-      setMensaje('Buscando rostro...');
-      interval = setInterval(() => {
+    let laserInterval;
+    if (hasPermission && isScanning && !loading) {
+      setMensaje('Escaneando rostro...');
+      laserInterval = setInterval(() => {
         setScanProgress((prev) => {
           if (prev >= 100) {
-            clearInterval(interval);
-            canDetect.current = false; // Bloqueamos nuevas detecciones
-            setIsScanning(false);      // Detenemos el escáner
-            checarAsistenciaReal();    // Enviamos al backend real
+            clearInterval(laserInterval);
+            setIsScanning(false);      // Apaga el láser
+            checarAsistenciaReal();    // Dispara al backend de XAMPP
             return 0;
           }
           return prev + 10;
         });
-      }, 150); // El escaneo dura aproximadamente 1.5 segundos
+      }, 100); // Escaneo rápido de 1 segundo
     } else {
       setScanProgress(0);
     }
-    return () => clearInterval(interval);
+    return () => clearInterval(laserInterval);
   }, [hasPermission, isScanning, loading]);
 
-  // 3. Función real para conectar con el backend y registrar asistencia
+  // 3. Activador manual del escaneo
+  const iniciarEscaneoManual = () => {
+    if (loading || isScanning) return;
+    setIsScanning(true); // Arranca el barrido verde una sola vez
+  };
+
+  // 4. Función real conectada al backend de XAMPP
   const checarAsistenciaReal = async () => {
     setLoading(true);
     setMensaje('Procesando rostro...');
@@ -102,12 +104,11 @@ export default function App() {
     } finally {
       setLoading(false);
       
-      // Esperamos 4 segundos antes de reactivar el detector para dar tiempo a que la persona se retire
+      // Esperamos 3 segundos para que el empleado vea su confirmación y limpiamos todo
       setTimeout(() => {
         setMensaje('Colócate frente a la pantalla');
-        canDetect.current = true; // Liberamos el candado para el siguiente empleado
-        setIsScanning(true);      // Reactivamos el escáner automático
-      }, 4000);
+        setScanProgress(0);
+      }, 3000);
     }
   };
 
@@ -116,13 +117,6 @@ export default function App() {
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
         <Text style={{ marginTop: 15, color: '#718096', fontSize: 16 }}>Solicitando acceso a la cámara...</Text>
-        
-        <TouchableOpacity 
-          style={[styles.button, { marginTop: 30, backgroundColor: '#E2E8F0' }]} 
-          onPress={() => setHasPermission(true)}
-        >
-          <Text style={{ color: '#4A5568', fontWeight: 'bold' }}>Simular Permiso (Demo/Emulador)</Text>
-        </TouchableOpacity>
       </View>
     );
   }
@@ -131,13 +125,13 @@ export default function App() {
     return (
       <View style={styles.center}>
         <Text style={{ textAlign: 'center', marginHorizontal: 30, color: '#4A5568', fontSize: 16, marginBottom: 20 }}>
-          No tenemos acceso a la cámara o tu emulador no tiene una cámara activa.
+          No tenemos acceso a la cámara o los permisos están retenidos.
         </Text>
         <TouchableOpacity 
           style={styles.button} 
           onPress={() => setHasPermission(true)}
         >
-          <Text style={styles.buttonText}>Forzar Acceso / Modo Simulación</Text>
+          <Text style={styles.buttonText}>Forzar Acceso / Iniciar Cámara</Text>
         </TouchableOpacity>
       </View>
     );
@@ -148,39 +142,41 @@ export default function App() {
       {/* Encabezado */}
       <View style={styles.header}>
         <Text style={styles.title}>Kiosco de Asistencia</Text>
-        <Text style={styles.subtitle}>Estación de Oficina (Manos Libres)</Text>
+        <Text style={styles.subtitle}>Estación de Oficina</Text>
       </View>
 
-      {/* Contenedor de la Cámara con Detector de Rostros */}
+      {/* Contenedor de la Cámara */}
       <View style={styles.cameraContainer}>
-        <CameraView 
-          style={styles.camera} 
-          facing="front"
-          onCameraReady={() => setIsCameraReady(true)}
-        >
-          {/* Óvalo guía */}
+        <CameraView style={styles.camera} facing="front" onCameraReady={() => setIsCameraReady(true)}>
+          {/* Capa exterior */}
           <View style={styles.overlay}>
             <View style={[
               styles.faceCutout,
-              scanProgress > 0 && { borderColor: '#10B981', borderWidth: 4 } // Cambia a verde mientras escanea
+              scanProgress > 0 && { borderColor: '#10B981', borderWidth: 4 }
             ]}>
-              {/* Línea de escaneo láser */}
+              {/* Línea de escaneo láser (Solo aparece si se presiona el botón) */}
               {scanProgress > 0 && (
-                <View style={[
-                  styles.scanLine,
-                  { top: `${scanProgress}%` }
-                ]} />
+                <View style={[styles.scanLine, { top: `${scanProgress}%` }]} />
               )}
             </View>
           </View>
         </CameraView>
       </View>
 
-      {/* Barra de estado inferior */}
+      {/* Barra de estado inferior con botón de acción */}
       <View style={styles.footer}>
         {loading && <ActivityIndicator size="small" color="#007AFF" style={{ marginBottom: 10 }} />}
         <Text style={styles.statusText}>{mensaje}</Text>
-        <Text style={{ fontSize: 12, color: '#A0AEC0' }}>El sistema escaneará tu rostro automáticamente</Text>
+        
+        <TouchableOpacity 
+          style={[styles.button, (loading || isScanning) && { backgroundColor: '#A0AEC0' }]} 
+          onPress={iniciarEscaneoManual}
+          disabled={loading || isScanning}
+        >
+          <Text style={styles.buttonText}>
+            {loading ? 'Procesando...' : isScanning ? 'Escaneando...' : 'Reconocer Rostro'}
+          </Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -196,20 +192,9 @@ const styles = StyleSheet.create({
   camera: { flex: 1 },
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
   faceCutout: { width: 250, height: 320, borderRadius: 125, borderWidth: 3, borderColor: '#007AFF', backgroundColor: 'transparent', overflow: 'hidden', position: 'relative' },
-  scanLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: '#10B981',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  footer: { padding: 30, backgroundColor: '#FFF', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
-  statusText: { fontSize: 18, fontWeight: '600', color: '#2D3748', marginBottom: 10, textAlign: 'center' },
-  button: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+  scanLine: { position: 'absolute', left: 0, right: 0, height: 4, backgroundColor: '#10B981', elevation: 5 },
+  footer: { padding: 25, backgroundColor: '#FFF', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
+  statusText: { fontSize: 18, fontWeight: '600', color: '#2D3748', marginBottom: 15, textAlign: 'center' },
+  button: { backgroundColor: '#007AFF', paddingVertical: 14, paddingHorizontal: 35, borderRadius: 10, width: '90%', alignItems: 'center' },
   buttonText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
 });
