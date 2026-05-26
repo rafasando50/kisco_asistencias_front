@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { CameraView, requestCameraPermissionsAsync, getCameraPermissionsAsync } from 'expo-camera';
 
@@ -8,7 +8,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState('Colócate frente a la pantalla');
   
-  // Estados para la animación del escaneo láser (SOLO se activa al presionar el botón)
+  // ESTA ES LA REFERENCIA PARA CONTROLAR LA CÁMARA
+  const cameraRef = useRef(null);
+  
+  // Estados para la animación del escaneo láser
   const [scanProgress, setScanProgress] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
 
@@ -35,22 +38,24 @@ export default function App() {
     })();
   }, []);
 
-  // 2. Animación láser: Corre UNA SOLA VEZ a petición del usuario
+  // 2. Animación láser: Al terminar el barrido, captura la foto real
   useEffect(() => {
     let laserInterval;
     if (hasPermission && isScanning && !loading) {
       setMensaje('Escaneando rostro...');
-      laserInterval = setInterval(() => {
+      laserInterval = setInterval(async () => {
         setScanProgress((prev) => {
           if (prev >= 100) {
             clearInterval(laserInterval);
-            setIsScanning(false);      // Apaga el láser
-            checarAsistenciaReal();    // Dispara al backend de XAMPP
+            setIsScanning(false); // Apaga el láser
+            
+            // DISPARAMOS LA CAPTURA DE FOTO AQUÍ MERO
+            capturarYEnviar();
             return 0;
           }
           return prev + 10;
         });
-      }, 100); // Escaneo rápido de 1 segundo
+      }, 100); 
     } else {
       setScanProgress(0);
     }
@@ -60,26 +65,40 @@ export default function App() {
   // 3. Activador manual del escaneo
   const iniciarEscaneoManual = () => {
     if (loading || isScanning) return;
-    setIsScanning(true); // Arranca el barrido verde una sola vez
+    setIsScanning(true); 
   };
 
-  // 4. Función real conectada al backend de XAMPP
-  const checarAsistenciaReal = async () => {
-    setLoading(true);
-    setMensaje('Procesando rostro...');
+  // 4. NUEVA FUNCIÓN: Captura la foto real en Base64 y la manda
+  const capturarYEnviar = async () => {
+    if (!cameraRef.current) {
+      setMensaje('Error: La cámara no está lista ❌');
+      return;
+    }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    setLoading(true);
+    setMensaje('Capturando rostro...');
 
     try {
+      // Tomamos la foto pidiendo explícitamente el formato Base64 y saltándonos el sonido del obturador
+      const opciones = { base64: true, quality: 0.5, skipProcessing: true };
+      const foto = await cameraRef.current.takePictureAsync(opciones);
+
+      setMensaje('Procesando rostro...');
+      console.log('¡Foto capturada con éxito en el celular!');
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      // Enviamos el string Base64 al backend dentro del JSON
       const response = await fetch('http://192.168.1.174:3000/api/asistencia/checar-temporal', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          empleado_id: 1, 
-          empresa_id: 1,  
+          empleado_id: 1, // Sigue fijo por ahora hasta meter la IA que lo reconozca
+          empresa_id: 1,
+          imagenBase64: foto.base64 // <-- AQUÍ VA TU FOTO REAL EN TEXTO
         }),
         signal: controller.signal,
       });
@@ -93,18 +112,10 @@ export default function App() {
         setMensaje(`Error: ${data.error || 'No se pudo registrar la asistencia'} ❌`);
       }
     } catch (error) {
-      clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
-        console.error('Timeout de conexión con el backend');
-        setMensaje('Error: Tiempo de espera agotado ❌');
-      } else {
-        console.error('Error de conexión:', error);
-        setMensaje('Error de conexión con el backend ❌');
-      }
+      console.error('Error en captura/envío:', error);
+      setMensaje('Error de conexión o captura ❌');
     } finally {
       setLoading(false);
-      
-      // Esperamos 3 segundos para que el empleado vea su confirmación y limpiamos todo
       setTimeout(() => {
         setMensaje('Colócate frente a la pantalla');
         setScanProgress(0);
@@ -127,10 +138,7 @@ export default function App() {
         <Text style={{ textAlign: 'center', marginHorizontal: 30, color: '#4A5568', fontSize: 16, marginBottom: 20 }}>
           No tenemos acceso a la cámara o los permisos están retenidos.
         </Text>
-        <TouchableOpacity 
-          style={styles.button} 
-          onPress={() => setHasPermission(true)}
-        >
+        <TouchableOpacity style={styles.button} onPress={() => setHasPermission(true)}>
           <Text style={styles.buttonText}>Forzar Acceso / Iniciar Cámara</Text>
         </TouchableOpacity>
       </View>
@@ -139,22 +147,24 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      {/* Encabezado */}
       <View style={styles.header}>
         <Text style={styles.title}>Kiosco de Asistencia</Text>
         <Text style={styles.subtitle}>Estación de Oficina</Text>
       </View>
 
-      {/* Contenedor de la Cámara */}
       <View style={styles.cameraContainer}>
-        <CameraView style={styles.camera} facing="front" onCameraReady={() => setIsCameraReady(true)}>
-          {/* Capa exterior */}
+        {/* LE EMPEÑAMOS LA REFERENCIA (ref={cameraRef}) A LA ETIQUETA */}
+        <CameraView 
+          ref={cameraRef}
+          style={styles.camera} 
+          facing="front" 
+          onCameraReady={() => setIsCameraReady(true)}
+        >
           <View style={styles.overlay}>
             <View style={[
               styles.faceCutout,
               scanProgress > 0 && { borderColor: '#10B981', borderWidth: 4 }
             ]}>
-              {/* Línea de escaneo láser (Solo aparece si se presiona el botón) */}
               {scanProgress > 0 && (
                 <View style={[styles.scanLine, { top: `${scanProgress}%` }]} />
               )}
@@ -163,7 +173,6 @@ export default function App() {
         </CameraView>
       </View>
 
-      {/* Barra de estado inferior con botón de acción */}
       <View style={styles.footer}>
         {loading && <ActivityIndicator size="small" color="#007AFF" style={{ marginBottom: 10 }} />}
         <Text style={styles.statusText}>{mensaje}</Text>
