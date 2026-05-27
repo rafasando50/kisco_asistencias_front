@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { CameraView, requestCameraPermissionsAsync, getCameraPermissionsAsync } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function App() {
-  const [hasPermission, setHasPermission] = useState(null);
+  const [permission, requestPermission] = useCameraPermissions();
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mensaje, setMensaje] = useState('Colócate frente a la pantalla');
@@ -15,28 +15,14 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
 
+  const hasPermission = permission ? permission.granted : null;
+
   // 1. Pedir permisos de la cámara al abrir la app
   useEffect(() => {
-    (async () => {
-      try {
-        const { status: existingStatus } = await getCameraPermissionsAsync();
-        if (existingStatus === 'granted') {
-          setHasPermission(true);
-          return;
-        }
-        const { status } = await requestCameraPermissionsAsync();
-        setHasPermission(status === 'granted');
-      } catch (error) {
-        console.warn("Error al verificar/solicitar permisos de cámara:", error);
-        try {
-          const { status } = await requestCameraPermissionsAsync();
-          setHasPermission(status === 'granted');
-        } catch (innerError) {
-          setHasPermission(false);
-        }
-      }
-    })();
-  }, []);
+    if (permission && !permission.granted && permission.canAskAgain) {
+      requestPermission();
+    }
+  }, [permission]);
 
   // 2. Animación láser: Al terminar el barrido, captura la foto real
   useEffect(() => {
@@ -64,13 +50,13 @@ export default function App() {
 
   // 3. Activador manual del escaneo
   const iniciarEscaneoManual = () => {
-    if (loading || isScanning) return;
+    if (loading || isScanning || !isCameraReady) return;
     setIsScanning(true); 
   };
 
   // 4. NUEVA FUNCIÓN: Captura la foto real en Base64 y la manda
   const capturarYEnviar = async () => {
-    if (!cameraRef.current) {
+    if (!cameraRef.current || !isCameraReady) {
       setMensaje('Error: La cámara no está lista ❌');
       return;
     }
@@ -79,31 +65,24 @@ export default function App() {
     setMensaje('Capturando rostro...');
 
     try {
-      // Tomamos la foto pidiendo explícitamente el formato Base64 y saltándonos el sonido del obturador
-      const opciones = { base64: true, quality: 0.5, skipProcessing: true };
+      // Tomamos la foto con compresión real y alta (calidad 0.1) para que el Base64 sea sumamente liviano y suba al instante
+      const opciones = { base64: true, quality: 0.1 };
       const foto = await cameraRef.current.takePictureAsync(opciones);
 
       setMensaje('Procesando rostro...');
       console.log('¡Foto capturada con éxito en el celular!');
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-      // Enviamos el string Base64 al backend dentro del JSON
+      // Enviamos el string Base64 al backend dentro del JSON (eliminamos el AbortController para evitar límites de tiempo artificiales)
       const response = await fetch('http://192.168.1.174:3000/api/asistencia/checar-temporal', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          empleado_id: 1, // Sigue fijo por ahora hasta meter la IA que lo reconozca
           empresa_id: 1,
-          imagenBase64: foto.base64 // <-- AQUÍ VA TU FOTO REAL EN TEXTO
+          imagenBase64: foto.base64
         }),
-        signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
       const data = await response.json();
 
       if (response.ok && data.success) {
@@ -136,10 +115,10 @@ export default function App() {
     return (
       <View style={styles.center}>
         <Text style={{ textAlign: 'center', marginHorizontal: 30, color: '#4A5568', fontSize: 16, marginBottom: 20 }}>
-          No tenemos acceso a la cámara o los permisos están retenidos.
+          No tenemos acceso a la cámara. Por favor, actívala en la configuración de tu dispositivo.
         </Text>
-        <TouchableOpacity style={styles.button} onPress={() => setHasPermission(true)}>
-          <Text style={styles.buttonText}>Forzar Acceso / Iniciar Cámara</Text>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
+          <Text style={styles.buttonText}>Solicitar Permiso de Cámara</Text>
         </TouchableOpacity>
       </View>
     );
@@ -159,7 +138,9 @@ export default function App() {
           style={styles.camera} 
           facing="front" 
           onCameraReady={() => setIsCameraReady(true)}
-        >
+        />
+        {/* Capa de diseño (overlay) colocada como hermana con posicionamiento absoluto para evitar interferencias de renderizado nativo */}
+        <View style={StyleSheet.absoluteFillObject}>
           <View style={styles.overlay}>
             <View style={[
               styles.faceCutout,
@@ -170,7 +151,7 @@ export default function App() {
               )}
             </View>
           </View>
-        </CameraView>
+        </View>
       </View>
 
       <View style={styles.footer}>
@@ -178,12 +159,12 @@ export default function App() {
         <Text style={styles.statusText}>{mensaje}</Text>
         
         <TouchableOpacity 
-          style={[styles.button, (loading || isScanning) && { backgroundColor: '#A0AEC0' }]} 
+          style={[styles.button, (loading || isScanning || !isCameraReady) && { backgroundColor: '#A0AEC0' }]} 
           onPress={iniciarEscaneoManual}
-          disabled={loading || isScanning}
+          disabled={loading || isScanning || !isCameraReady}
         >
           <Text style={styles.buttonText}>
-            {loading ? 'Procesando...' : isScanning ? 'Escaneando...' : 'Reconocer Rostro'}
+            {!isCameraReady ? 'Iniciando cámara...' : loading ? 'Procesando...' : isScanning ? 'Escaneando...' : 'Reconocer Rostro'}
           </Text>
         </TouchableOpacity>
       </View>
